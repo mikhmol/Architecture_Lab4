@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"net/http"
 	"time"
 
@@ -29,6 +30,9 @@ var (
 		"server3:8080",
 	}
 )
+
+// keep track of the total number of bytes returned by each server
+var serverBytes = make(map[string]int64)
 
 func scheme() string {
 	if *https {
@@ -72,9 +76,12 @@ func forward(dst string, rw http.ResponseWriter, r *http.Request) error {
 		log.Println("fwd", resp.StatusCode, resp.Request.URL)
 		rw.WriteHeader(resp.StatusCode)
 		defer resp.Body.Close()
-		_, err := io.Copy(rw, resp.Body)
+		byteCount, err := io.Copy(rw, resp.Body)
 		if err != nil {
 			log.Printf("Failed to write response: %s", err)
+		} else {
+			serverBytes[dst] += byteCount
+			log.Printf("Received bytes dst=%s, bytes=%d", dst, serverBytes[dst])
 		}
 		return nil
 	} else {
@@ -84,12 +91,26 @@ func forward(dst string, rw http.ResponseWriter, r *http.Request) error {
 	}
 }
 
+// get a server which return minimal bytes
+func getMinByteServer() string {
+	var minServer string
+	var minBytes int64 = math.MaxInt64
+	for server, bytes := range serverBytes {
+		if bytes < minBytes {
+			minServer = server
+			minBytes = bytes
+		}
+	}
+	return minServer
+}
+
 func main() {
 	flag.Parse()
 
 	// TODO: Використовуйте дані про стан сервреа, щоб підтримувати список тих серверів, яким можна відправляти ззапит.
 	for _, server := range serversPool {
 		server := server
+		serverBytes[server] = 0
 		go func() {
 			for range time.Tick(10 * time.Second) {
 				log.Println(server, health(server))
@@ -99,10 +120,11 @@ func main() {
 
 	frontend := httptools.CreateServer(*port, http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
 		// TODO: Рееалізуйте свій алгоритм балансувальника.
-		forward(serversPool[0], rw, r)
+		minServer := getMinByteServer()
+		forward(minServer, rw, r)
 	}))
 
-	log.Println("Starting load balancer...")
+	log.Println("Starting load balancer (variant 8) ...")
 	log.Printf("Tracing support enabled: %t", *traceEnabled)
 	frontend.Start()
 	signal.WaitForTerminationSignal()
