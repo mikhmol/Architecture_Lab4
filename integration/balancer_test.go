@@ -20,11 +20,26 @@ func TestBalancer(t *testing.T) {
 	}
 
 	// TODO: Реалізуйте інтеграційний тест для балансувальникка.
-	resp, err := client.Get(fmt.Sprintf("%s/api/v1/some-data", baseAddress))
-	if err != nil {
-		t.Error(err)
+	var previousLbFrom string
+
+	// Send multiple requests
+	for i := 0; i < 5; i++ {
+		resp, err := client.Get(fmt.Sprintf("%s/api/v1/some-data", baseAddress))
+		if err != nil {
+			t.Error(err)
+		}
+		defer resp.Body.Close()
+
+		lbFrom := resp.Header.Get("lb-from")
+		if lbFrom == previousLbFrom {
+			t.Errorf("lb-from has not changed. Previous: %s, Current: %s", previousLbFrom, lbFrom)
+		}
+
+		previousLbFrom = lbFrom
+		t.Logf("response from [%s]", lbFrom)
+		time.Sleep(time.Second)
 	}
-	t.Logf("response from [%s]", resp.Header.Get("lb-from"))
+
 }
 
 func BenchmarkBalancer(b *testing.B) {
