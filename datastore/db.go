@@ -17,19 +17,21 @@ const defaultOutFileName = "current-data"
 var ErrNotFound = fmt.Errorf("record does not exist")
 
 type hashIndex map[string]int64
+
+// keep segment indexes per key
 type fileIndex map[string]int
 
 const TenMegabytes = 10 * 1024 * 1024
 
 type Db struct {
-	out         *os.File
-	outPath     string
-	outOffset   int64
-	fileCounter int
+	out          *os.File
+	outPath      string
+	outOffset    int64
+	segmentIndex int
 
-	index       hashIndex
-	fileMap     fileIndex
-	maxFileSize int64
+	index         hashIndex
+	segmmentIndex fileIndex
+	maxFileSize   int64
 }
 
 func NewDb(dir string, maxFileSize ...int64) (*Db, error) {
@@ -40,7 +42,7 @@ func NewDb(dir string, maxFileSize ...int64) (*Db, error) {
 		size = TenMegabytes // default size
 	}
 
-	fileCounter, err := getFileCounter(dir)
+	fileCounter, err := getMaxSegmentIndex(dir)
 	if err != nil {
 		return nil, err
 	}
@@ -53,12 +55,12 @@ func NewDb(dir string, maxFileSize ...int64) (*Db, error) {
 		return nil, err
 	}
 	db := &Db{
-		outPath:     outputPath,
-		out:         f,
-		index:       make(hashIndex),
-		fileMap:     make(fileIndex),
-		maxFileSize: size,
-		fileCounter: 0,
+		outPath:       outputPath,
+		out:           f,
+		index:         make(hashIndex),
+		segmmentIndex: make(fileIndex),
+		maxFileSize:   size,
+		segmentIndex:  0,
 	}
 	err = db.recover()
 	if err != nil && err != io.EOF {
@@ -83,8 +85,8 @@ func (db *Db) recover() error {
 
 		filePath := filepath.Join(filepath.Dir(db.outPath), file.Name())
 
-		// Extract the file number from the filename
-		fileNumber, err := strconv.Atoi(strings.TrimPrefix(file.Name(), defaultOutFileName+"-"))
+		// extract segment index from the filename
+		segmentIndex, err := strconv.Atoi(strings.TrimPrefix(file.Name(), defaultOutFileName+"-"))
 		if err != nil {
 			return err
 		}
@@ -130,7 +132,7 @@ func (db *Db) recover() error {
 				e.Decode(data)
 				db.index[e.key] = db.outOffset
 				db.outOffset += int64(n)
-				db.fileMap[e.key] = fileNumber
+				db.segmmentIndex[e.key] = segmentIndex
 			}
 		}
 
@@ -151,12 +153,12 @@ func (db *Db) Get(key string) (string, error) {
 		return "", ErrNotFound
 	}
 
-	fileNumber, ok := db.fileMap[key]
+	segmentIndex, ok := db.segmmentIndex[key]
 	if !ok {
 		return "", ErrNotFound
 	}
 
-	filePath := filepath.Join(filepath.Dir(db.outPath), defaultOutFileName+"-"+strconv.Itoa(fileNumber))
+	filePath := filepath.Join(filepath.Dir(db.outPath), defaultOutFileName+"-"+strconv.Itoa(segmentIndex))
 	fmt.Println("Path:", filePath)
 	file, err := os.Open(filePath)
 	if err != nil {
@@ -188,48 +190,58 @@ func (db *Db) Put(key, value string) error {
 		// Close the current file
 		db.out.Close()
 
-		// Open a new file
-		db.fileCounter++
-		db.outPath = filepath.Join(filepath.Dir(db.outPath), defaultOutFileName+"-"+strconv.Itoa(db.fileCounter))
+		// Open a new segment file
+		db.segmentIndex++
+		db.outPath = filepath.Join(filepath.Dir(db.outPath), defaultOutFileName+"-"+strconv.Itoa(db.segmentIndex))
 		db.out, err = os.OpenFile(db.outPath, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0o600)
 		if err != nil {
 			return err
 		}
 		db.outOffset = 0
+
+		// Start a goroutine to merge segments to delete not actual data
+		go db.mergeSegmentFiles()
+
 	}
+
 	e := entry{
 		key:   key,
 		value: value,
 	}
+
 	n, err := db.out.Write(e.Encode())
 	if err == nil {
 		db.index[key] = db.outOffset
-		db.fileMap[key] = db.fileCounter
+		db.segmmentIndex[key] = db.segmentIndex
 		db.outOffset += int64(n)
+
 	}
 	return err
 }
 
-func getFileCounter(dir string) (int, error) {
+// scam directory to get max existing segment file and return its index
+func getMaxSegmentIndex(dir string) (int, error) {
 	files, err := ioutil.ReadDir(dir)
 	if err != nil {
 		return 0, err
 	}
-	// Initialize the fileCounter to 0
-	fileCounter := 0
-	// Find the file with the highest counter in the directory
+	maxIndex := 0
 	for _, f := range files {
 		if !f.IsDir() && strings.HasPrefix(f.Name(), defaultOutFileName+"-") {
-			// Extract the counter from the filename
-			counter, err := strconv.Atoi(strings.TrimPrefix(f.Name(), defaultOutFileName+"-"))
+			index, err := strconv.Atoi(strings.TrimPrefix(f.Name(), defaultOutFileName+"-"))
 			if err != nil {
 				return 0, err
 			}
-			// Update the fileCounter if this file has a higher counter
-			if counter > fileCounter {
-				fileCounter = counter
+			if index > maxIndex {
+				maxIndex = index
 			}
 		}
 	}
-	return fileCounter, nil
+	return maxIndex, nil
+}
+
+// Merge all old files into one
+func (db *Db) mergeSegmentFiles() {
+	fmt.Println("Merge segment files", db.outPath)
+	//TODO: implement merge
 }
