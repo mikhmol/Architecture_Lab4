@@ -35,7 +35,6 @@ func TestBalancer(t *testing.T) {
 
 		previousLbFrom = lbFrom
 		t.Logf("response from [%s]", lbFrom)
-		time.Sleep(time.Second)
 	}
 
 }
