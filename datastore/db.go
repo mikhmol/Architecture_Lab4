@@ -69,54 +69,76 @@ func NewDb(dir string, maxFileSize ...int64) (*Db, error) {
 
 const bufSize = 8192
 
+// shall process all files in directory
 func (db *Db) recover() error {
-	input, err := os.Open(db.outPath)
+	files, err := ioutil.ReadDir(filepath.Dir(db.outPath))
 	if err != nil {
 		return err
 	}
-	defer input.Close()
 
-	outInfo, err := input.Stat()
-	size1 := outInfo.Size()
-	fmt.Println("Size", size1)
+	for _, file := range files {
+		if file.IsDir() || !strings.HasPrefix(file.Name(), defaultOutFileName+"-") {
+			continue
+		}
 
-	var buf [bufSize]byte
-	in := bufio.NewReaderSize(input, bufSize)
-	for err == nil {
-		var (
-			header, data []byte
-			n            int
-		)
-		header, err = in.Peek(bufSize)
-		if err == io.EOF {
-			if len(header) == 0 {
-				return err
-			}
-		} else if err != nil {
+		filePath := filepath.Join(filepath.Dir(db.outPath), file.Name())
+
+		// Extract the file number from the filename
+		fileNumber, err := strconv.Atoi(strings.TrimPrefix(file.Name(), defaultOutFileName+"-"))
+		if err != nil {
 			return err
 		}
-		size := binary.LittleEndian.Uint32(header)
 
-		if size < bufSize {
-			data = buf[:size]
-		} else {
-			data = make([]byte, size)
+		// Open the file
+		input, err := os.Open(filePath)
+		if err != nil {
+			return err
 		}
-		n, err = in.Read(data)
 
-		if err == nil {
-			if n != int(size) {
-				return fmt.Errorf("corrupted file")
+		var buf [bufSize]byte
+		in := bufio.NewReaderSize(input, bufSize)
+		for err == nil {
+			var (
+				header, data []byte
+				n            int
+			)
+			header, err = in.Peek(bufSize)
+			if err == io.EOF {
+				if len(header) == 0 {
+					break
+				}
+			} else if err != nil {
+				input.Close()
+				return err
 			}
+			size := binary.LittleEndian.Uint32(header)
 
-			var e entry
-			e.Decode(data)
-			db.index[e.key] = db.outOffset
-			db.outOffset += int64(n)
-			db.fileMap[e.key] = 0 /// we need to know file index here
+			if size < bufSize {
+				data = buf[:size]
+			} else {
+				data = make([]byte, size)
+			}
+			n, err = in.Read(data)
+
+			if err == nil {
+				if n != int(size) {
+					input.Close()
+					return fmt.Errorf("corrupted file")
+				}
+
+				var e entry
+				e.Decode(data)
+				db.index[e.key] = db.outOffset
+				db.outOffset += int64(n)
+				db.fileMap[e.key] = fileNumber
+			}
 		}
+
+		// Close the file, maybe left last one opened after recovering?
+		input.Close()
 	}
-	return err
+
+	return nil
 }
 
 func (db *Db) Close() error {
