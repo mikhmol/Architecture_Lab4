@@ -16,3 +16,10 @@ services:
   balancer:
     # Для тестів включаємо режим відлагодження, коли балансувальник додає інформацію, кому було відправлено запит.
     command: ["lb", "--trace=true"]
+    networks:
+      - servers
+    ports:
+      - "8090:8090"
+
+networks:
+  servers:

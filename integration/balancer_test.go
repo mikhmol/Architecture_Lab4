@@ -19,10 +19,8 @@ func TestBalancer(t *testing.T) {
 		t.Skip("Integration test is not enabled")
 	}
 
-	// TODO: Реалізуйте інтеграційний тест для балансувальникка.
 	var previousLbFrom string
 
-	// Send multiple requests
 	for i := 0; i < 5; i++ {
 		resp, err := client.Get(fmt.Sprintf("%s/api/v1/some-data", baseAddress))
 		if err != nil {
@@ -43,5 +41,11 @@ func TestBalancer(t *testing.T) {
 }
 
 func BenchmarkBalancer(b *testing.B) {
-	// TODO: Реалізуйте інтеграційний бенчмарк для балансувальникка.
+	for i := 0; i < b.N; i++ {
+		resp, err := client.Get(fmt.Sprintf("%s/api/v1/some-data", baseAddress))
+		if err != nil {
+			b.Error(err)
+		}
+		resp.Body.Close()
+	}
 }

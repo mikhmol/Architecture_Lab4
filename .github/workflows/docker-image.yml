@@ -17,3 +17,6 @@ jobs:
 
     - name: Docker Compose Build
       run: docker-compose build
+    
+    - name: Docker Compose Integration Test
+      run: docker-compose -f docker-compose.yaml -f docker-compose.test.yaml up --exit-code-from test
