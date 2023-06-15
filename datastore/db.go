@@ -8,6 +8,7 @@ import (
 	"io/ioutil"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -24,14 +25,16 @@ type fileIndex map[string]int
 const TenMegabytes = 10 * 1024 * 1024
 
 type Db struct {
-	out          *os.File
-	outPath      string
-	outOffset    int64
-	segmentIndex int
+	out        *os.File
+	outPath    string
+	outOffset  int64
+	outSegment int
 
-	index         hashIndex
-	segmmentIndex fileIndex
-	maxFileSize   int64
+	// keep indexes: key offset in file and key segment
+	index     hashIndex
+	fileIndex fileIndex
+
+	maxFileSize int64
 }
 
 func NewDb(dir string, maxFileSize ...int64) (*Db, error) {
@@ -42,12 +45,12 @@ func NewDb(dir string, maxFileSize ...int64) (*Db, error) {
 		size = TenMegabytes // default size
 	}
 
-	fileCounter, err := getMaxSegmentIndex(dir)
+	maxSegmentIndex, err := getMaxSegmentNumber(dir)
 	if err != nil {
 		return nil, err
 	}
 
-	outputPath := filepath.Join(dir, defaultOutFileName+"-"+strconv.Itoa(fileCounter))
+	outputPath := filepath.Join(dir, defaultOutFileName+"-"+strconv.Itoa(maxSegmentIndex))
 	fmt.Println("Path ", outputPath)
 
 	f, err := os.OpenFile(outputPath, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0o600)
@@ -55,12 +58,12 @@ func NewDb(dir string, maxFileSize ...int64) (*Db, error) {
 		return nil, err
 	}
 	db := &Db{
-		outPath:       outputPath,
-		out:           f,
-		index:         make(hashIndex),
-		segmmentIndex: make(fileIndex),
-		maxFileSize:   size,
-		segmentIndex:  0,
+		outPath:     outputPath,
+		out:         f,
+		index:       make(hashIndex),
+		fileIndex:   make(fileIndex),
+		maxFileSize: size,
+		outSegment:  maxSegmentIndex,
 	}
 	err = db.recover()
 	if err != nil && err != io.EOF {
@@ -71,12 +74,20 @@ func NewDb(dir string, maxFileSize ...int64) (*Db, error) {
 
 const bufSize = 8192
 
-// shall process all files in directory
+// shall recover data indexes for all avaliable segments
 func (db *Db) recover() error {
 	files, err := ioutil.ReadDir(filepath.Dir(db.outPath))
 	if err != nil {
 		return err
 	}
+
+	// sort the files in ascending order,
+	// current-data-1, current-data-2 etc
+	// it is important to maintain c orrect indexes
+	// later added data override old ones
+	sort.Slice(files, func(i, j int) bool {
+		return files[i].Name() < files[j].Name()
+	})
 
 	for _, file := range files {
 		if file.IsDir() || !strings.HasPrefix(file.Name(), defaultOutFileName+"-") {
@@ -86,7 +97,7 @@ func (db *Db) recover() error {
 		filePath := filepath.Join(filepath.Dir(db.outPath), file.Name())
 
 		// extract segment index from the filename
-		segmentIndex, err := strconv.Atoi(strings.TrimPrefix(file.Name(), defaultOutFileName+"-"))
+		segment, err := strconv.Atoi(strings.TrimPrefix(file.Name(), defaultOutFileName+"-"))
 		if err != nil {
 			return err
 		}
@@ -132,7 +143,7 @@ func (db *Db) recover() error {
 				e.Decode(data)
 				db.index[e.key] = db.outOffset
 				db.outOffset += int64(n)
-				db.segmmentIndex[e.key] = segmentIndex
+				db.fileIndex[e.key] = segment
 			}
 		}
 
@@ -148,17 +159,17 @@ func (db *Db) Close() error {
 }
 
 func (db *Db) Get(key string) (string, error) {
+	segment, ok := db.fileIndex[key]
+	if !ok {
+		return "", ErrNotFound
+	}
+
 	position, ok := db.index[key]
 	if !ok {
 		return "", ErrNotFound
 	}
 
-	segmentIndex, ok := db.segmmentIndex[key]
-	if !ok {
-		return "", ErrNotFound
-	}
-
-	filePath := filepath.Join(filepath.Dir(db.outPath), defaultOutFileName+"-"+strconv.Itoa(segmentIndex))
+	filePath := filepath.Join(filepath.Dir(db.outPath), defaultOutFileName+"-"+strconv.Itoa(segment))
 	fmt.Println("Path:", filePath)
 	file, err := os.Open(filePath)
 	if err != nil {
@@ -191,8 +202,8 @@ func (db *Db) Put(key, value string) error {
 		db.out.Close()
 
 		// Open a new segment file
-		db.segmentIndex++
-		db.outPath = filepath.Join(filepath.Dir(db.outPath), defaultOutFileName+"-"+strconv.Itoa(db.segmentIndex))
+		db.outSegment++
+		db.outPath = filepath.Join(filepath.Dir(db.outPath), defaultOutFileName+"-"+strconv.Itoa(db.outSegment))
 		db.out, err = os.OpenFile(db.outPath, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0o600)
 		if err != nil {
 			return err
@@ -212,15 +223,14 @@ func (db *Db) Put(key, value string) error {
 	n, err := db.out.Write(e.Encode())
 	if err == nil {
 		db.index[key] = db.outOffset
-		db.segmmentIndex[key] = db.segmentIndex
+		db.fileIndex[key] = db.outSegment
 		db.outOffset += int64(n)
-
 	}
 	return err
 }
 
 // scam directory to get max existing segment file and return its index
-func getMaxSegmentIndex(dir string) (int, error) {
+func getMaxSegmentNumber(dir string) (int, error) {
 	files, err := ioutil.ReadDir(dir)
 	if err != nil {
 		return 0, err
