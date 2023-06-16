@@ -5,6 +5,14 @@ networks:
 
 services:
 
+  database:
+    build: .
+    command: "db"
+    networks:
+      - servers
+    ports:
+      - "8085:8080"
+
   balancer:
     build: .
     command: "lb"
@@ -33,10 +41,3 @@ services:
       - servers
     ports:
       - "8082:8080"
-      
-  database:
-    build: .
-    networks:
-      - servers
-    ports:
-      - "8085:8080"

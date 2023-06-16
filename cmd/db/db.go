@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"io/ioutil"
+	"log"
 	"net/http"
 	"os"
 
@@ -21,12 +22,14 @@ type Request struct {
 }
 
 func main() {
+	log.Println("Intializing database server ...")
+
 	r := mux.NewRouter()
 
 	dir, err := ioutil.TempDir("", "test-db")
 	if err != nil {
 		fmt.Println("Error creating temporary directory:", err)
-		os.Exit(1) // Exit with a non-zero error code
+		//os.Exit(1) // Exit with a non-zero error code
 	}
 	defer func() {
 		os.RemoveAll(dir)
@@ -92,6 +95,7 @@ func main() {
 	}).Methods("POST")
 
 	server := httptools.CreateServer(*port, r)
+	log.Println("Starting database server ...")
 	server.Start()
 	signal.WaitForTerminationSignal()
 }
