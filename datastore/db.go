@@ -2,6 +2,7 @@ package datastore
 
 import (
 	"bufio"
+	"context"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -14,20 +15,23 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+
+	"golang.org/x/sync/semaphore"
 )
 
-const defaultOutFileName = "data-segment"
+const (
+	defaultOutFileName = "data-segment"
+	TenMegabytes       = 10 * 1024 * 1024
+	workerPoolSize     = 20 // Change this value to control the maximum number of concurrent file descriptors
+)
 
 var ErrNotFound = fmt.Errorf("record does not exist")
+var goroutineID int64
 
 type hashIndex map[string]int64
 
 // keep segment indexes per key
 type fileIndex map[string]int
-
-const TenMegabytes = 10 * 1024 * 1024
-
-var goroutineID int64
 
 type Db struct {
 	out        *os.File
@@ -35,13 +39,16 @@ type Db struct {
 	outOffset  int64
 	outSegment int
 
-	// keep indexes: key offset in file and key segment
-	index     hashIndex
-	fileIndex fileIndex
+	// indexes:
+	index     hashIndex // key -> offset
+	fileIndex fileIndex // key -> segment
 
 	maxFileSize int64
-	wg          sync.WaitGroup // added a WaitGroup
-	mu          sync.RWMutex
+
+	wg sync.WaitGroup // for unit tests
+	mu sync.RWMutex   // synchronize access to the file index
+
+	workerPool *semaphore.Weighted
 }
 
 func NewDb(dir string, maxFileSize ...int64) (*Db, error) {
@@ -71,6 +78,7 @@ func NewDb(dir string, maxFileSize ...int64) (*Db, error) {
 		fileIndex:   make(fileIndex),
 		maxFileSize: size,
 		outSegment:  maxSegmentIndex,
+		workerPool:  semaphore.NewWeighted(workerPoolSize),
 	}
 	err = db.recover()
 	if err != nil && err != io.EOF {
@@ -184,6 +192,13 @@ func (db *Db) Get(key string) (string, error) {
 	if !ok {
 		return "", ErrNotFound
 	}
+
+	// Wait until a worker is available
+	if err := db.workerPool.Acquire(context.Background(), 1); err != nil {
+		// This should never happen under normal circumstances
+		return "", fmt.Errorf("acquire worker: %w", err)
+	}
+	defer db.workerPool.Release(1)
 
 	filePath := filepath.Join(filepath.Dir(db.outPath), defaultOutFileName+"-"+strconv.Itoa(segment))
 	fmt.Println("Get segment:", filepath.Base(filePath))
