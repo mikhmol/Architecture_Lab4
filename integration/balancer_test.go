@@ -1,6 +1,7 @@
 package integration
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
@@ -14,6 +15,45 @@ var client = http.Client{
 	Timeout: 3 * time.Second,
 }
 
+type Payload struct {
+	Key   string `json:"key"`
+	Value string `json:"value"`
+}
+
+func TestDatabaseServer(t *testing.T) {
+	if _, exists := os.LookupEnv("INTEGRATION_TEST"); !exists {
+		t.Skip("Integration test is not enabled")
+	}
+
+	resp, err := client.Get(fmt.Sprintf("%s/api/v1/some-data", baseAddress))
+	if err != nil {
+		t.Error(err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("Unexpected status code: %d", resp.StatusCode)
+		return
+	}
+
+	var data Payload
+	err = json.NewDecoder(resp.Body).Decode(&data)
+	if err != nil {
+		t.Error(err)
+		return
+	}
+
+	expectedData := Payload{
+		Key:   "solo",
+		Value: "2023-06-16",
+	}
+
+	if data != expectedData {
+		t.Errorf("Unexpected JSON response. Got %+v, want %+v", data, expectedData)
+	}
+
+}
+
 func TestBalancer(t *testing.T) {
 	if _, exists := os.LookupEnv("INTEGRATION_TEST"); !exists {
 		t.Skip("Integration test is not enabled")
@@ -21,6 +61,7 @@ func TestBalancer(t *testing.T) {
 
 	var previousLbFrom string
 
+	// Send multiple requests
 	for i := 0; i < 5; i++ {
 		resp, err := client.Get(fmt.Sprintf("%s/api/v1/some-data", baseAddress))
 		if err != nil {

@@ -29,7 +29,7 @@ func main() {
 	dir, err := ioutil.TempDir("", "test-db")
 	if err != nil {
 		fmt.Println("Error creating temporary directory:", err)
-		//os.Exit(1) // Exit with a non-zero error code
+		os.Exit(1) // Exit with a non-zero error code
 	}
 	defer func() {
 		os.RemoveAll(dir)
