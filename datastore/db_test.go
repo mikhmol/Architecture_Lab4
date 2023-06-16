@@ -95,7 +95,7 @@ func TestDb_Put(t *testing.T) {
 
 }
 
-func TestDb_Put_FileRotation(t *testing.T) {
+func TestDb_Put_Merge(t *testing.T) {
 	// Create temporary directory for test files
 	dir, err := ioutil.TempDir("", "test-db-rotation")
 	if err != nil {
@@ -118,14 +118,31 @@ func TestDb_Put_FileRotation(t *testing.T) {
 		}
 	}
 
+	// Wait for the merge operation to complete
+	db.wg.Wait()
+
 	// Check if multiple files are created
 	files, err := ioutil.ReadDir(dir)
 	if err != nil {
 		t.Fatalf("Could not read directory: %v", err)
 	}
-
-	expectedNumFiles := len(keys) // Since max file size is 1 byte, we expect one file per key
+	// for _, file := range files {
+	// 	fmt.Println(file.Name())
+	// }
+	//expectedNumFiles := len(keys) // Since max file size is 1 byte, we expect one file per key
+	expectedNumFiles := 2
 	if len(files) != expectedNumFiles {
 		t.Errorf("Expected %d files, got %d", expectedNumFiles, len(files))
+	}
+
+	// Check if all keys are present in the merged DB (index consistency)
+	for _, key := range keys {
+		value, err := db.Get(key)
+		if err != nil {
+			t.Fatalf("Could not get item: %v", err)
+		}
+		if value != "value" {
+			t.Errorf("Expected value 'value', got '%s'", value)
+		}
 	}
 }
