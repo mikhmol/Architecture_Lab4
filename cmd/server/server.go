@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io/ioutil"
 	"net/http"
 	"os"
 	"strconv"
@@ -49,11 +50,23 @@ func main() {
 
 		report.Process(r)
 
+		// Call database using http.DefaultClient
+		resp, err := http.Get(databaseURL)
+		if err != nil {
+			http.Error(rw, "Error getting data", http.StatusInternalServerError)
+			return
+		}
+		defer resp.Body.Close()
+
+		body, err := ioutil.ReadAll(resp.Body)
+		if err != nil {
+			http.Error(rw, "Error reading data", http.StatusInternalServerError)
+			return
+		}
+
 		rw.Header().Set("content-type", "application/json")
 		rw.WriteHeader(http.StatusOK)
-		_ = json.NewEncoder(rw).Encode([]string{
-			"1", "2",
-		})
+		rw.Write(body)
 	})
 
 	h.Handle("/report", report)
@@ -61,7 +74,7 @@ func main() {
 	server := httptools.CreateServer(*port, h)
 	server.Start()
 
-	// Send a POST request to the database service when the delay is over.
+	// Init database
 	jsonData := Payload{
 		Value: "2023-06-16",
 	}
